@@ -1,4 +1,6 @@
-# sitecoreapi-dotnet-sdks
+<img src="assets/dotBRIDGE-logo.png" alt="dotBRIDGE" width="32" align="left" valign="baseline" style="margin-right:1rem" />
+
+# dotBRIDGE - Sitecore APIs
 
 **.NET SDKs for SitecoreAI, Experience Edge, CDP, and Sitecore Search — part of the [dotBRIDGE](https://ping-works.com.au/partners/dotBRIDGE) effort by [PING Works](https://ping-works.com.au).**
 
