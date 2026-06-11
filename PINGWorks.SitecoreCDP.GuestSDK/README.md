@@ -5,7 +5,7 @@ More information about Sitecore's API is at [Guest API Doc (official)](https://a
 
 ## Features
 - Typed, DI-friendly service for interacting with the Sitecore CDP Guest API v2.1
-- Async-first API with full XML documentation comments
+- Async-first API with `CancellationToken` support and full XML documentation comments
 - NetStandard 2.1 for wide compatibility
 - HTTP Basic Auth using Client Key and API Token from the CDP portal
 - Focused sub-interfaces for guest management and data extensions

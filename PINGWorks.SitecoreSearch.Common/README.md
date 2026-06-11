@@ -173,7 +173,7 @@ Call into the leaf SDK with the strongly-typed document:
 
 ```csharp
 var result = await search.Search<BlogsDocument>(
-    "sitecore xm cloud",
+    "sitecore ai",
     new SearchQuery<BlogsDocument>
     {
         Limit = 10,

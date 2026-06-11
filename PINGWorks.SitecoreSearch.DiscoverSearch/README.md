@@ -16,14 +16,14 @@ registered in the same DI container without conflict.
 - Async-first APIs with `CancellationToken` support
 - `netstandard2.1` for wide compatibility
 - Standard resilience handler (retries, circuit breaker, timeouts) on every HTTP client
-- In-memory response cache for Search (5-minute default); per-widget cache-aware batching
+- Multi-widget batched search — one HTTP call for a whole page of widgets
 - Automatic `__ruid` cookie management — **JS-SDK-compatible format**, so the same visitor is tracked under the same identifier whether the request comes from the browser SDK or our server-side SDK
 - Pluggable `IDiscoverSessionProvider` for Blazor authentication integration
 - Auto-fires `view_widget` events after every Search / Recommend / SearchBatch — zero-code widget impression tracking
 - Full Discover event surface: widget, identity, commerce, navigation, plus a catch-all for custom events
 - Strongly-typed document types from the source generator shipped in `PINGWorks.SitecoreSearch.Common`
-- Semantic-search routing driven by the document type's `[SitecoreSearchSource]` metadata
-- Recommendation `recipe` overrides and `rule` (boost / bury / blacklist) clauses
+- Semantic-search routing driven by the document type's `[SitecoreSearchSource]` metadata (via the `+semsearch` flag)
+- Recommendation `rule` (boost / bury / blacklist) overrides
 - Questions endpoint (AI Q&A) support
 
 ## Getting started
@@ -33,7 +33,7 @@ registered in the same DI container without conflict.
 You will need:
 
 - A **Sitecore Discover** account with at least one configured source
-- Your **Discover customer key** — the single value from CEC of form `{domainId}-{domainHash}` (e.g. `"11111-2222222"`)
+- Your **Discover customer key** — the single value from CEC of form `{accountId}-{domainId}` (e.g. `"11111-2222222"`)
 - A **Discover API key**
 - The regional **endpoint URLs** for Search, Events, and Ingestion (these vary by data centre — for example `discover-apse2.sitecorecloud.io` for APSE2)
 
@@ -56,16 +56,18 @@ automatically as a transitive dependency.
       "ApiKey":            "[Secret. Your Discover API key]",
       "SearchEndpoint":    "https://discover-apse2.sitecorecloud.io",
       "EventsEndpoint":    "https://events-apse2.sitecorecloud.io",
-      "IngestionEndpoint": "https://ingestion-apse2.sitecorecloud.io"
+      "IngestionEndpoint": "https://ingestion-apse2.sitecorecloud.io",
+      "DefaultLocale":     "en_us"
     }
   }
 }
 ```
 
-> **Don't split the customer key.** Copy it verbatim from the CEC. The SDK extracts
-> the parts internally — Search and Ingestion URLs use the `domainId` (left half), the
-> Events URL uses the whole value, and the `__ruid` visitor cookie embeds the `domainHash`
-> (right half). Splitting it manually is the most common source of misconfiguration.
+> **Don't split the customer key.** Copy it verbatim from the CEC. The customer key is
+> `{accountId}-{domainId}`; the SDK extracts the parts internally — Search and Ingestion URLs
+> use the `domainId` (the **right** half), the Events URL uses the whole value as `ckey`, and the
+> `__ruid` visitor cookie embeds the `domainId` too. Splitting it manually is the most common
+> source of misconfiguration.
 
 We recommend Visual Studio's **User Secrets** for `ApiKey` during development.
 
@@ -94,7 +96,6 @@ provider and supporting infrastructure.
 | - | - | - |
 | `ISitecoreDiscoverSearchSdk`, `ISitecoreDiscoverEventsSdk`, `ISitecoreDiscoverIngestionSdk` | Transient (per `AddHttpClient<,>`) | The typed-client default — keeps the underlying `HttpMessageHandler` rotation from `IHttpClientFactory` working correctly. |
 | `IDiscoverSessionProvider` | Scoped | Reads / writes the per-request `__ruid` cookie. |
-| `IMemoryCache` | Singleton | Process-wide cache. |
 | `IHttpContextAccessor` | Singleton | Per-request `HttpContext` resolved through ambient state. |
 
 **Consuming the SDK from a Singleton service** (e.g. a hosted background worker): the SDK
@@ -156,8 +157,9 @@ an `rfkId` — it's the widget identifier required on every API call. See the
 ```
 
 The generator emits a strongly-typed `ProductsDocument` record. If
-`searchSettings.semanticRanking.enabled` is true, the SDK automatically routes calls
-to the `/semantic-search` endpoint.
+`searchSettings.semanticRanking.enabled` is true, the SDK automatically adds the
+`rfk_flags: ["+semsearch"]` flag to that document's widget item, requesting semantic search
+on the standard endpoint (there is no separate semantic-search URL).
 
 ## Visitor identity — how the SDK tracks who's who
 
@@ -198,7 +200,7 @@ read:
 | Part | Source | Meaning |
 | - | - | - |
 | `domainHash` | the right half of your `CustomerKey` | Identifies the Discover domain this id belongs to. |
-| `xx-xx-4x-1p` | random base-36 + literal device marker | Type 4 UUID variant marker (`4`) plus device-class hint (`p` = "pc", because every request from this server-side SDK is a non-mobile origin from Discover's perspective). |
+| `xx-xx-4x-1p` | random base-36 + device marker | Type 4 UUID variant marker (`4`) plus a device-class hint — `p` (pc) by default, settable via `IDiscoverSessionProvider.CurrentDevice`. |
 | 20-char block | five concatenated `Math.random()` segments | The actual entropy — uniquely identifies this visitor. |
 | `TIME_ms` | `Date.now()` at cookie creation | Lets Discover infer first-seen time without a separate field. |
 
@@ -210,12 +212,55 @@ JS SDK would either reject it (treating the visitor as anonymous) or overwrite i
 By emitting the exact JS format, we ensure a single visitor tracks under a single id
 whether the request originated from the browser or from our server.
 
-### Known-user tracking — three options
+### Known-user tracking
 
-When the user is authenticated, Discover prefers `user.user_id` (the consumer's system
-identifier) over `user.uuid` for personalisation. There are three ways to surface this:
+When the user is authenticated, Discover prefers `user.user_id` (the consumer's system identifier)
+over `user.uuid` for personalisation. The SDK always sends `uuid` (the anonymous `__ruid`); `user_id`
+is added once a user is logged in.
 
-#### Option 1 — sticky single-user override
+#### `LoginUser` / `LogoutUser` (recommended)
+
+Call `IDiscoverSessionProvider.LoginUser( user )` from your authentication sign-in handler, and
+`LogoutUser()` on sign-out. Pass a `DiscoverUserInfo` — only `Id` is required, but the other fields
+(email, segments, address, etc.) sharpen personalisation. `LoginUser` does both halves of the job in
+one step: it stores the id so every subsequent request sends it as `user.user_id`, and fires the
+`login` event (carrying those details) so Discover stitches the visitor's prior anonymous activity to
+the now-known user. `LogoutUser()` fires the `logout` event and reverts subsequent traffic to the
+anonymous `uuid`.
+
+```csharp
+public sealed class DiscoverAuthBridge(
+    AuthenticationStateProvider authProvider,
+    IDiscoverSessionProvider session
+) : IDisposable
+{
+    public DiscoverAuthBridge()
+        => authProvider.AuthenticationStateChanged += OnChanged;
+
+    private async void OnChanged( Task<AuthenticationState> stateTask )
+    {
+        var state = await stateTask;
+        var id = state.User.FindFirst( ClaimTypes.NameIdentifier )?.Value;
+
+        if ( state.User.Identity?.IsAuthenticated == true && id is not null )
+            _ = session.LoginUser( new DiscoverUserInfo
+            {
+                Id    = id,
+                Email = state.User.FindFirst( ClaimTypes.Email )?.Value
+            } );
+        else
+            _ = session.LogoutUser();
+    }
+
+    public void Dispose()
+        => authProvider.AuthenticationStateChanged -= OnChanged;
+}
+```
+
+> `GetCurrentUserId()` never returns null — it returns the logged-in user id, or the anonymous
+> `__ruid` id when no user is logged in.
+
+#### Sticky single-user override
 
 For CLI tools, admin pages, or background workers where the SDK instance serves a single
 known user across its lifetime. Set `Options.UserId` in your IoC config; every request
@@ -228,11 +273,12 @@ builder.Services.AddSitecoreDiscoverSearchSdk( opt => {
 });
 ```
 
-#### Option 2 — per-circuit Blazor authentication (the typical web-app pattern)
+#### Advanced: custom session provider
 
-When the user identity varies per request / per circuit — e.g. a Blazor SSR app where each
-visitor is a different authenticated principal — **inherit from `DefaultDiscoverSessionProvider`**
-and override **only** `GetCurrentUserId()` to read from `AuthenticationStateProvider`:
+Reach for a custom provider only when you need identity resolution beyond `LoginUser` / `LogoutUser` —
+for example resolving the user from `AuthenticationStateProvider` on every call rather than at sign-in.
+**Inherit from `DefaultDiscoverSessionProvider`** and override `GetCurrentUserId()` (return the known
+id, or `base.GetCurrentUserId()` for the anonymous fallback):
 
 ```csharp
 internal sealed class AuthAwareDiscoverSessionProvider( 
@@ -241,7 +287,7 @@ internal sealed class AuthAwareDiscoverSessionProvider(
     AuthenticationStateProvider auth
 ) : DefaultDiscoverSessionProvider( http, opts )
 {
-    public override string? GetCurrentUserId()
+    public override string GetCurrentUserId()
     {
         var task = auth.GetAuthenticationStateAsync();
         if ( !task.IsCompletedSuccessfully )
@@ -249,7 +295,7 @@ internal sealed class AuthAwareDiscoverSessionProvider(
 
         var user = task.Result.User;
         return user.Identity?.IsAuthenticated == true
-            ? user.FindFirst( ClaimTypes.NameIdentifier )?.Value
+            ? user.FindFirst( ClaimTypes.NameIdentifier )?.Value ?? base.GetCurrentUserId()
             : base.GetCurrentUserId();
     }
 }
@@ -274,54 +320,6 @@ The SDK registers `DefaultDiscoverSessionProvider` via `TryAddScoped`, so this s
 > In nearly all cases that one method is `GetCurrentUserId()`. Don't override
 > `GetOrCreateAnonymousId()` unless you have a very specific reason — get it wrong and the
 > JS SDK on the same page will treat your visitors as strangers.
-
-#### Option 3 — fire `UserLogin` at sign-in time
-
-Leave the per-request flow on `uuid` and call `events.UserLogin(...)` once at login (see
-the **Events** section below). Discover backfills all prior anonymous activity to the
-now-known user server-side; subsequent traffic continues to send `uuid`, but Discover knows
-who's behind it.
-
-This is the lowest-friction option when you don't need the user id present on every API
-call — and it's the one the JS SDK starter kit demonstrates by default.
-
-### `AuthenticationStateChanged` integration
-
-If your Blazor app fires `AuthenticationStateChanged` (login / logout), wire it to a
-hosted service that fires the appropriate identity events:
-
-```csharp
-public sealed class DiscoverAuthBridge( 
-    AuthenticationStateProvider authProvider,
-    ISitecoreDiscoverEventsSdk events
-) : IDisposable
-{
-    public DiscoverAuthBridge()
-    {
-        authProvider.AuthenticationStateChanged += OnChanged;
-    }
-
-    private async void OnChanged( Task<AuthenticationState> stateTask )
-    {
-        var state = await stateTask;
-
-        if ( state.User.Identity?.IsAuthenticated == true )
-        {
-            _ = events.UserLogin( new DiscoverUserInfo
-            {
-                Id    = state.User.FindFirst( ClaimTypes.NameIdentifier )!.Value,
-                Email = state.User.FindFirst( ClaimTypes.Email )?.Value
-            } );
-        }
-        else
-        {
-            _ = events.UserLogout();
-        }
-    }
-
-    public void Dispose() => authProvider.AuthenticationStateChanged -= OnChanged;
-}
-```
 
 ## Events consent — gating events on per-request cookie consent
 
@@ -414,7 +412,7 @@ internal sealed class ConsentAndAuthAwareDiscoverSessionProvider(
     AuthenticationStateProvider auth
 ) : DefaultDiscoverSessionProvider( http, opts )
 {
-    public override string? GetCurrentUserId()
+    public override string GetCurrentUserId()
     {
         var task = auth.GetAuthenticationStateAsync();
         if ( !task.IsCompletedSuccessfully )
@@ -422,7 +420,7 @@ internal sealed class ConsentAndAuthAwareDiscoverSessionProvider(
 
         var user = task.Result.User;
         return user.Identity?.IsAuthenticated == true
-            ? user.FindFirst( ClaimTypes.NameIdentifier )?.Value
+            ? user.FindFirst( ClaimTypes.NameIdentifier )?.Value ?? base.GetCurrentUserId()
             : base.GetCurrentUserId();
     }
 
@@ -475,9 +473,8 @@ returned by the Discover Search API: `RfkId`, `Entity`, `WidgetType`, `Keyphrase
 ### Batched search (multi-widget pages)
 
 When one page needs results from several widgets — main results plus "trending in category"
-plus "recently viewed" — use `SearchBatch` to pack them into one HTTP call. Cache hits are
-served from cache without going over the wire; only cache-miss widgets go in the batch.
-`view_widget` fires for every widget in the batch (cache hits included).
+plus "recently viewed" — use `SearchBatch` to pack them into one HTTP call.
+`view_widget` fires for every widget in the batch.
 
 ```csharp
 var batchResp = await search.SearchBatch( b => b
@@ -517,17 +514,9 @@ Pure visitor-profile recommendation (no context):
 var picks = await search.Recommend<HomepagePicksDocument>();
 ```
 
-#### Recipe override
-
-Override the widget's configured ML strategy (find the recipe ID/version in CEC under
-**Global Resources → Recipes**):
-
-```csharp
-var picks = await search.Recommend<HomepagePicksDocument>( new RecommendationContext
-{
-    RecipeOverride = new DiscoverRecipeOverride( "548980", version: 1 )
-} );
-```
+> **Recipes are widget config, not a request parameter.** A recommendation widget's ML strategy
+> (recipe) is assigned to the widget in the CEC under **Global Resources → Recipes**; it is not
+> overridable per request. A widget with no recipe configured returns a `recipe_not_found` error.
 
 #### Rule override (boost / bury / blacklist)
 
@@ -548,12 +537,6 @@ var picks = await search.Recommend<HomepagePicksDocument>( new RecommendationCon
     RuleOverride = rule
 } );
 ```
-
-#### Important: recommendations are not cached
-
-Unlike `Search`, `Recommend` calls **always go over the wire**. The model re-personalises
-every call against the live visitor profile and current page context — caching would defeat
-the engine.
 
 #### Critical: click attribution drives recommendation quality
 
@@ -604,15 +587,21 @@ Three things to call out in that snippet:
 
 ### Questions (AI Q&A)
 
-For widgets configured with a `questions` strategy in CEC:
+For widgets configured as a questions-answers widget in CEC. A **keyphrase is required** — Sitecore
+only generates answers when it qualifies as a *question* or *statement*; a bare keyword returns empty
+(so pair this with a search widget in a batch to cover the keyword path). The result carries the
+generated Q&A pairs in `RelatedQuestions`, not content documents:
 
 ```csharp
-var qa = await search.Questions<FaqDocument>( limit: 5, includeSources: true );
+var qa = await search.Questions<FaqDocument>( "what is sitecore search", relatedLimit: 5 );
 
 if ( qa.IsSuccessful )
-    foreach ( var item in qa.Result!.Items )
-        Console.WriteLine( $"{item.Question}: {item.Answer}" );
+    foreach ( var pair in qa.Result!.RelatedQuestions )
+        Console.WriteLine( $"{pair.Question}: {pair.Answer}" );
 ```
+
+Pass `exactAnswer: true` to also request a single exact answer to the keyphrase (returned as one
+more pair in `RelatedQuestions`).
 
 ### Suggestions (type-ahead / autocomplete)
 
@@ -655,17 +644,15 @@ var titles    = resp.Result!.Suggestions["product_titles"];
 var categories = resp.Result!.Suggestions["category_names"];
 ```
 
-**Suggestions are not cached.** The partial keyphrase changes on every keystroke; caching
-would only delay UX without helping. Debounce the call on the consumer side instead — most
+**Debounce on the consumer side.** The partial keyphrase changes on every keystroke — most
 type-ahead inputs use a 150–300ms debounce.
 
 ### Batched search + recommendation (mixed)
 
 `SearchBatch` accepts both search and recommendation items in the same call via
-`AddRecommendation<TDoc>()`. The SDK constructs the right wire clause per item, dispatches
-one HTTP call (or two if the batch mixes semantic-search and standard endpoints), and
-demuxes the results by document type. **Search items participate in the cache; recommend
-items always dispatch live** so personalisation stays fresh.
+`AddRecommendation<TDoc>()`. The SDK constructs the right wire clause per item, dispatches a
+single HTTP call (semantic and standard items mix freely — semantic is a per-item flag, not a
+separate endpoint), and demuxes the results by document type.
 
 ```csharp
 var batchResp = await search.SearchBatch( b => b
@@ -743,7 +730,8 @@ public class CatalogSync( ISitecoreDiscoverIngestionSdk ingestion )
 {
     public async Task<string> Upsert( ProductsDocument product )
     {
-        var resp = await ingestion.Upsert( "products", product.ProductId!, product );
+        // locale is required; entity defaults to "content" (pass entity: "product" etc. to override).
+        var resp = await ingestion.Upsert( "products", product.ProductId!, product, locale: "en_us", entity: "product" );
 
         if ( !resp.IsSuccessful )
             throw new InvalidOperationException( $"Ingestion failed: {resp.Status}" );
@@ -760,10 +748,10 @@ public class CatalogSync( ISitecoreDiscoverIngestionSdk ingestion )
 | Method | Description |
 | - | - |
 | `Search<TDoc>( query, options?, ct? )` | Single-widget keyphrase search. Returns `ApiResponse<DiscoverSearchResult<TDoc>>`. Auto-fires `view_widget`. |
-| `SearchBatch( configure, ct? )` | Multi-widget batched search and/or recommendation. Cache-aware for search items; recommend items always dispatch live. Returns `ApiResponse<DiscoverSearchBatch>` — use `Get<TDoc>()` per widget. |
-| `Recommend<TDoc>( context?, ct? )` | Recommendation widget (no keyphrase). **Not cached**. Supports recipe + rule overrides. |
-| `Questions<TDoc>( limit?, includeSources?, ct? )` | AI Q&A widget. |
-| `Suggest<TDoc>( partial, options, ct? )` | Type-ahead / autocomplete. **Not cached** — debounce on the consumer side. Returns `ApiResponse<DiscoverSuggestResult>` keyed by suggester name. |
+| `SearchBatch( configure, ct? )` | Multi-widget batched search and/or recommendation. Returns `ApiResponse<DiscoverSearchBatch>` — use `Get<TDoc>()` per widget. |
+| `Recommend<TDoc>( context?, ct? )` | Recommendation widget (no keyphrase). Supports rule (boost/bury/blacklist) overrides; the recipe is the widget's CEC config. |
+| `Questions<TDoc>( keyphrase, relatedLimit?, exactAnswer?, ct? )` | AI Q&A widget. Keyphrase required; returns `DiscoverQuestionsResponse.RelatedQuestions` (Q&A pairs). |
+| `Suggest<TDoc>( partial, options, ct? )` | Type-ahead / autocomplete. Debounce on the consumer side. Returns `ApiResponse<DiscoverSuggestResult>` keyed by suggester name. |
 
 ### `ISitecoreDiscoverEventsSdk`
 
@@ -808,10 +796,17 @@ Catch-all:
 
 | Method | Description |
 | - | - |
-| `Upsert<TDoc>( sourceId, documentId, document, ct? )` |  |
-| `BulkUpsert<TDoc>( sourceId, documents, ct? )` | Multiple documents per call. |
-| `Delete( sourceId, documentId, ct? )` |  |
-| `GetStatus( sourceId, incrementalUpdateId, ct? )` | Poll a job's progress. |
+| `Upsert<TDoc>( sourceId, documentId, document, locale?, entity = "content", ct? )` | Create-or-update one document (PUT). |
+| `Delete( sourceId, documentId, locale?, entity = "content", ct? )` | Delete a document (`locale` may be `all`). |
+| `GetStatus( sourceId, incrementalUpdateId, entity = "content", ct? )` | Poll a job's progress. |
+
+> The Ingestion API is single-document only (no bulk endpoint), authenticates with an
+> **API key that has the `ingestion` scope** (not an OAuth access token), and processes
+> asynchronously — `Upsert`/`Delete` return an `incremental_update_id`; poll `GetStatus` for completion.
+>
+> `locale` is **required by the API** on document operations. For a single-locale domain (Domain
+> Settings → locale settings disabled), set `DiscoverSearchSdkOptions.DefaultLocale` once (e.g.
+> `en_us`) and omit it at the call site; otherwise pass it explicitly per call.
 
 ### Pluggable infrastructure
 

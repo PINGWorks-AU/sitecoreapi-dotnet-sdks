@@ -5,7 +5,7 @@ More information about Sitecore's API is at [Publishing API Doc (official)](http
 
 ## Features
 - Typed, DI-friendly service for interacting with the Sitecore Experience Edge Publishing API
-- Async-first API with full XML documentation comments
+- Async-first API with `CancellationToken` support and full XML documentation comments
 - NetStandard 2.1 for wide compatibility
 - Automatic token maintenance using client credentials flow
 - Offset and checkpoint pagination for listing publishing jobs

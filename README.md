@@ -28,7 +28,7 @@ to Blazor on Azure rather than rebuilding it from scratch on a different stack.
 dotBRIDGE spans three layers:
 
 - **A Blazor rendering head** that replaces Sitecore's Content SDK at runtime.
-- **A Blok-based Blazor UI library** ([`SitecoreBlok.BlazorUI`](https://github.com/PINGWorks-AU/SitecoreBlok.BlazorUI), OSS / MIT)
+- **A Blok-based Blazor UI library** ([`SitecoreBlok.BlazorUI`](https://github.com/PINGWorks-AU/SitecoreBlok.BlazorUI), OSS / Apache-2.0)
   — a Blazor port of Sitecore's Blok design system for building first-party-looking Marketplace plugins.
 - **Strongly-typed API SDKs** — the libraries documented in this repository, which wrap Sitecore's
   public APIs behind typed, dependency-injection-friendly interfaces.
@@ -105,12 +105,13 @@ context IDs), the available `AppSettings`, DI registration, and the full method 
 
 ## Licensing
 
-The packages in this repository are **free to use** but are **not open-source licensed**. This
-repository hosts their README documentation and library releases for cross-referencing from the
-published NuGet packages.
+The packages in this repository are **free to use** but are **not open-source licensed** — see the
+[Proprietary Distribution License](LICENSE.md) for the full terms (royalty-free redistribution and
+commercial use, in unmodified form). This repository hosts their README documentation and library
+releases for cross-referencing from the published NuGet packages.
 
 Other dotBRIDGE libraries are published separately; some of those (such as the
-[`SitecoreBlok.BlazorUI`](https://github.com/PINGWorks-AU/SitecoreBlok.BlazorUI) UI kit) are MIT licensed.
+[`SitecoreBlok.BlazorUI`](https://github.com/PINGWorks-AU/SitecoreBlok.BlazorUI) UI kit) are Apache-2.0 licensed.
 
 ---
 

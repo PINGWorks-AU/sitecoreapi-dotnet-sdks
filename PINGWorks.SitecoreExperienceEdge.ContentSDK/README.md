@@ -94,6 +94,8 @@ builder.Services.AddSitecoreEEContentSdk( opt => config.GetSection( "mySettings"
 | Execute&lt;T&gt;( GraphQLRootOperation ) | Execute a GraphQL query against Sitecore and parse the response into a model. |
 | Execute( GraphQLRootOperation ) | Execute a GraphQL query against Sitecore and set the response into the operation parameter. |
 
+> Deprecation: the `GetEditingLayout` overload that takes a `version` argument now raises a build warning. Sitecore's Edge API no longer uses the argument, so the overload forwards to the one without it and behaviour is unchanged for typical use. Update callers to the overload that omits `version`.
+
 ###  Models
 
 Many models are supplied to represent the standard responses to layout APIs. These are largely contained in the namespace

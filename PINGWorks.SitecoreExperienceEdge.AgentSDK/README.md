@@ -5,7 +5,7 @@ More information about Sitecore's API is at [Agent API Doc (official)](https://a
 
 ## Features
 - Typed, DI-friendly services for interacting with the Sitecore Agent API
-- Async-first APIs with full XML documentation comments
+- Async-first APIs with `CancellationToken` support and full XML documentation comments
 - NetStandard 2.1 for wide compatibility
 - Automatic token maintenance using client credentials flow
 - `x-sc-job-id` header support on all operations for tracing and reverting agent actions

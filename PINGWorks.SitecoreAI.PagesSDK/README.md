@@ -5,7 +5,7 @@ More information about Sitecore's API is at [Pages API Doc (official)](https://a
 
 ## Features
 - Typed, DI-friendly service for interacting with the SitecoreAI Pages API
-- Async-first API with full XML documentation comments
+- Async-first API with `CancellationToken` support and full XML documentation comments
 - NetStandard 2.1 for wide compatibility
 - Automatic token maintenance using client credentials flow
 - Optional `environmentId` parameter on all operations for targeting specific environments
@@ -73,7 +73,7 @@ This library uses Json serialization through `System.Text.Json`.
 
 ### Using the environment ID
 
-Most operations accept an optional `environmentId` parameter that targets a specific XM Cloud environment. When omitted, the default environment is used.
+Most operations accept an optional `environmentId` parameter that targets a specific SAI environment. When omitted, the default environment is used.
 
 ```csharp
 // Target a specific environment
